@@ -5,7 +5,7 @@ import pandas as pd
 from libraryImports import *
 from createCommunity import *
 
-
+#calculate user preference satisfaction for the timeslot
 def calculateAcceptanceRate(memberID, timestamp, memberCommunityData, transactionData, poolOrMarket):
     if poolOrMarket == 'pool':
         totalAllocatedEnergy = abs(sum(memberCommunityData['energyAllocatedToPools (kwh)']))
@@ -22,6 +22,8 @@ def calculateAcceptanceRate(memberID, timestamp, memberCommunityData, transactio
 
     return acceptanceRate
 
+
+#calculate the self-sufficiency and consumption for the timeslot
 def calculateSelfSufficiencyAndConsumption(communityLog):
     allMemberIDs = communityLog['memberID'].unique()
 
@@ -33,7 +35,6 @@ def calculateSelfSufficiencyAndConsumption(communityLog):
         selfSufficiency = (totalDemand - leftoverDemand) / totalDemand * 100
     else:
         selfSufficiency = 0
-    #print('Self-sufficency: {}'.format(selfSufficiency))
 
     ## Self-consumption = (KW power generated in community - total export) / KW power generated in community
     producerOnlyData = communityLog[communityLog['tradeableEnergy (kwh)'] > 0]
@@ -54,6 +55,7 @@ def calculateSelfSufficiencyAndConsumption(communityLog):
 
     return selfSufficiency, selfConsumption, prodToConsRatio
 
+#extract the energy traded and the role for a particular user in a transaction
 def extractEnergyAndRoleForOneUser(transactionData, timestamp):
     timepointData = transactionData[transactionData['timestamp'] == timestamp]
 
@@ -72,6 +74,7 @@ def extractEnergyAndRoleForOneUser(transactionData, timestamp):
 
     return energyTraded, tradingMoney, role
 
+#calculate all the metrics for the timeslot for all members
 def calculateAllMetricsPerRound(communityLog, roundLogDir, calculateAcceptance, poolOrMarket, marketPrice, allMemberIDs):
     acceptanceRates = []
     if os.path.exists(os.path.join(roundLogDir, f'performanceMetrics_{poolOrMarket}.csv')):
@@ -89,12 +92,12 @@ def calculateAllMetricsPerRound(communityLog, roundLogDir, calculateAcceptance, 
     selfSufficiency, selfConsumption, PCR = calculateSelfSufficiencyAndConsumption(communityLog)
 
 
-
+    #for share market savings
     totalTradedEnergyProd, totalTradedEnergyCons = 0, 0
     totalTradingMoneyProd, totalTradingMoneyCons  = 0, 0
 
 
-    ## Acceptance rate (per person) = sum of matched energy in pools / allocated tradable energy to the pools(preferences)
+    # calculate share of market savings and user preference satisfaction (old: acceptance rate)
     for memberID in allMemberIDs:
         transactionData = pd.read_csv(os.path.join(roundLogDir, '{}_transactions.csv'.format(memberID)))
         memberCommunityData = communityLog[communityLog['memberID'] == memberID].reset_index()
@@ -108,6 +111,7 @@ def calculateAllMetricsPerRound(communityLog, roundLogDir, calculateAcceptance, 
             totalTradedEnergyProd += tradedEnergy
             totalTradingMoneyProd += tradingMoney
 
+        ## Acceptance rate (per person) = sum of matched energy in pools / allocated tradable energy to the pools(preferences)
         if calculateAcceptance:
             memberAcceptanceRate = calculateAcceptanceRate(memberID, timestamp, memberCommunityData, transactionData, poolOrMarket)
             memberAcceptanceRateDF = pd.DataFrame(
@@ -137,6 +141,7 @@ def calculateAllMetricsPerRound(communityLog, roundLogDir, calculateAcceptance, 
 
     return communityPerformanceMetricsTable, acceptanceRates
 
+#same as above but separately for a pool
 def calculateMetricsPerRoundForEachPool(timestamp, simulationRound, roundLogDir, allMemberIDs, calculateAcceptance, poolName, marketPrice):
     acceptanceRates = []
     if os.path.exists(os.path.join(roundLogDir, f'performanceMetrics_{poolName}.csv')):
@@ -148,14 +153,10 @@ def calculateMetricsPerRoundForEachPool(timestamp, simulationRound, roundLogDir,
         acceptanceRates = pd.DataFrame()
 
 
-    # simulationRound = communityLog['simRound'][0]
-    # timestamp = communityLog['timestamp'][0]
-
 
     totalTradedEnergyProd, totalTradedEnergyCons = 0, 0
     totalTradingMoneyProd, totalTradingMoneyCons  = 0, 0
 
-    ## Acceptance rate (per person) = sum of matched energy in pools / allocated tradable energy to the pools(preferences)
     for memberID in allMemberIDs:
         transactionData = pd.read_csv(os.path.join(roundLogDir, '{}_transactions.csv'.format(memberID)))
 
@@ -169,6 +170,7 @@ def calculateMetricsPerRoundForEachPool(timestamp, simulationRound, roundLogDir,
             totalTradedEnergyProd += tradedEnergy
             totalTradingMoneyProd += tradingMoney
 
+        ## Acceptance rate (per person) = sum of matched energy in pools / allocated tradable energy to the pools(preferences)
         if calculateAcceptance:
             memberCommunityData = communityLog[communityLog['memberID'] == memberID].reset_index()
             memberAcceptanceRate = calculateAcceptanceRate(memberID, timestamp, memberCommunityData, transactionData, 'pool')

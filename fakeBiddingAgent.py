@@ -12,11 +12,6 @@ class leftoverEnergy(BaseModel):
     memberID: str
     unmatchedEnergyInKwh: float
 
-@biddingAgentApp.get('/leftoverEnergy/{memberID}')
-def getUnmatchedEnergy(memberID: str):
-    print(fakeBiddingAgent[memberID])
-    return fakeBiddingAgent[memberID]
-
 def getMarketPrice():
     marketData = {'marketPriceEurocentPerKwh': marketPrice}
     return marketData

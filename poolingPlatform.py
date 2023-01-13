@@ -22,7 +22,7 @@ poolingRunning = 0
 
 
 
-
+#the main Pooling Platform class that imports the data from other components and executes all the pools
 class PoolingPlatform:
     poolingRunning = asyncio.Event()
     leftoverEnergyDetermined = asyncio.Event()
@@ -31,9 +31,9 @@ class PoolingPlatform:
     def __init__(self, memberID):
         self.poolsDictionary = {}  # partition of the pool that calculates energy within the pool
         self.localMemberID = memberID  # the ID of the participant whose instance is running
-        self.localLeftoverEnergy = 0
-        self.allMatches = []
-        self.poolAllocationPercentages = pd.DataFrame()
+        self.localLeftoverEnergy = 0 #energy to be sent to the market after the pooling is done
+        self.allMatches = [] #all transactions for the local pooling platform user
+        self.poolAllocationPercentages = pd.DataFrame() #the % of energy of the local user allocated to each pool
 
 
 
@@ -42,9 +42,9 @@ class PoolingPlatform:
     # get the tradeable energy from the OBSd, pool configurations from the community platform, and the current market price from the bidding agent
     # to be later used to set up pools
     async def getDataForPoolInitialization(self):
-        communityPlatformData = fakeCPDatabase[self.localMemberID].__dict__
+        communityPlatformData = fakeCPDatabase[self.localMemberID].__dict__ #import the pool information data
         print(communityPlatformData['pools'])
-        obsdData = fakeObsdDB[self.localMemberID].__dict__
+        obsdData = fakeObsdDB[self.localMemberID].__dict__ #import the available energy data for the local user
         biddingAgentData = getMarketPrice()
         print('OwnID: {}'.format(self.localMemberID))
 
@@ -116,7 +116,7 @@ class PoolingPlatform:
                                                              poolConfig["userPricePolicyOption"],
                                                              poolConfig["userPricePolicyFixedPrice"],
                                                              poolConfig["userPricePolicyPercent"])
-            # also set events
+            # also set events for asynchronous
             newPool.tradeableEnergyDetermined = asyncio.Event()
             newPool.matchesComputed = asyncio.Event()
             newPool.matchesValidated = asyncio.Event()
@@ -167,7 +167,7 @@ class PoolingPlatform:
         return outputDF
 
 #-------------------------------------------LOGGING-------------------------------------------------------------------
-
+    #add the information about this user in this round to the general community log
     def writeEnergyLog(self, initialTotalTradeableEnergy, energyInPools):
         # open or create a file
         if os.path.exists(communityLog):
@@ -186,7 +186,7 @@ class PoolingPlatform:
         file.to_csv(communityLog, index=False)
         return tmp
 
-
+#the class to run each pool separately
 class Pool:
     gridFees = [[0, 1, 2, 3],
                 [1, 0, 1, 2],
@@ -207,9 +207,9 @@ class Pool:
         self.notParticipating = {}
         self.energyPrice = energyPrice  # price per kw in the pool, to be set when pool is set ip
         self.energyRestrictions = energyRestrictions  # not being developed in early versions
-        self.memberGridLocations = gridLocations  # TODO: can be optimised
+        self.memberGridLocations = gridLocations
 
-        # events
+        # events (to be later declared)
         self.tradeableEnergyDetermined = ...
         self.matchesComputed = ...
         self.matchesValidated = ...
@@ -274,8 +274,9 @@ class Pool:
         async with AsyncClient(app=poolingApp, base_url=f"http://{baseIP}/") as client:
             memberInfo = await client.get(f"http://{baseIP}/interPoolCommunication/{otherMemberID}/tradeableEnergy/{self.poolID}/{self.localPoolMember.memberID}")
         memberInfo = json.loads(memberInfo.json()['payload'])  # info for that member for this pool
+
+        #if there is no information at the first request - retry
         if memberInfo['role'] == -11:
-            #print('{}: request error => retry'.format(otherMemberID))
             await asyncio.sleep(2)
             async with AsyncClient(app=poolingApp, base_url=f"http://{baseIP}/") as client:
                 memberInfo = await client.get(
@@ -288,6 +289,7 @@ class Pool:
                                    gridLocation=self.memberGridLocations[member_index])
         return otherMemberID
 
+    #sends tradeable energy of this user to other users of the pool
     async def sendEnergyInfoToAllOtherPoolMembers(self):
         coroutines = []
         for memberID in self.memberIDs:
@@ -295,6 +297,7 @@ class Pool:
                 coroutines.append(self.sendEnergyInfoToOneOtherPoolMember(memberID))
         await asyncio.gather(*coroutines)
 
+    #gets tradeable energy from other users of the pool
     async def sendEnergyInfoToOneOtherPoolMember(self, targetMemberID):
         tradeableEnergy = self.energyInPoolBeforeMatching
         memberRole = self.localPoolMember.roleInRound
@@ -317,77 +320,20 @@ class Pool:
                 self.energyBuyers[member.memberID] = member
             else: #no tradeable energy and error codes
                 self.notParticipating[member.memberID] = member
-        # sort sellers and buyers by member ID
-        # self.energySellers.sort(key=lambda x: x.memberID, reverse=True)
-        # self.energyBuyers.sort(key=lambda x: x.memberID, reverse=True)
 
-    # match sellers and buyers based on the respective grid fees between them
-    # record the matchs and save them in the respective pool member objects
-    def matchByGridFee(self):
-        localPoolMembersMatches = []
-        if self.localPoolMember.roleInRound != -1:
-            for buyer in self.energyBuyers:
-                # determine all pairwise grid fees for this seller and sort the buyers by them
-                sellerGridFees = pd.DataFrame(columns=['memberID', 'gridFee'])
-                if len(self.energySellers) > 0:
-                    for seller in self.energySellers:
-                        sellerGridFees = pd.concat([sellerGridFees, pd.DataFrame(
-                            [[seller.memberID, self.gridFees[seller.gridLocation][buyer.gridLocation]]],
-                            columns=['memberID', 'gridFee'])])
-                    # sort the buyers by the grid fee and get the order of indexes
-                    sellerGridFees = sellerGridFees.reset_index(drop=True)
-                    sellerGridFees = sellerGridFees.sort_values(by=['gridFee'])
-                    sellerOrder = list(
-                        sellerGridFees.index)  # list of indices where the first is the index of the buyer with the lowest grid fee etc
-
-                    # go through the buyers sorted by grid fee and distribute energy based on that
-                    for sellerID in sellerOrder:
-                        seller = self.energySellers[sellerID]
-
-                        if (buyer.tradeableEnergyInPool != 0) & (seller.tradeableEnergyInPool != 0):
-                            seller.tradeableEnergyInPool, buyer.tradeableEnergyInPool, match = self.executeMatch(
-                                seller, buyer)
-                        else:
-                            # add empty match to the record
-                            match = poolMatch(seller.memberID, buyer.memberID, 0, 0, 0)
-                        if (seller.memberID == self.localPoolMember.memberID) | (
-                                buyer.memberID == self.localPoolMember.memberID):
-                            localPoolMembersMatches.append(match)
-                        seller.currentMatches.append(match)
-                        buyer.currentMatches.append(match)
-
-            # also record null matchs for the members not participating in this trading round
-            for member in self.notParticipating:
-                if self.localPoolMember.roleInRound == 1:
-                    match = poolMatch(self.localPoolMember.memberID, member.memberID, 0, 0, 0)
-                else:
-                    match = poolMatch(member.memberID, self.localPoolMember.memberID, 0, 0, 0)
-
-                member.currentMatches.append(match)
-                self.localPoolMember.currentMatches.append(match)
-                localPoolMembersMatches.append(match)
-
-        else:
-            for seller in self.energySellers:
-                match = poolMatch(self.localPoolMember.memberID, seller.memberID, 0, 0, 0)
-                self.localPoolMember.currentMatches.append(match)
-                localPoolMembersMatches.append(match)
-            for buyer in self.energyBuyers:
-                match = poolMatch(self.localPoolMember.memberID, buyer.memberID, 0, 0, 0)
-                self.localPoolMember.currentMatches.append(match)
-                localPoolMembersMatches.append(match)
-
-        self.matchesToDict()
-        return localPoolMembersMatches
-
+    #matches users based on the cost of transmission between them and the energy supply/demand
     def matchByGridFeeImproved(self):
         localPoolMembersMatches = []
 
-        if self.localPoolMember.roleInRound != -1:
+        if self.localPoolMember.roleInRound != -1: #if user if participating in this round
+
+            #create a table of seller-buyer pairs with the grid fee for that pair
             buyerSellerGridFees = self.makeSellerBuyerTable()
 
             #match all lowest grid fees
             gridFeesOrdered = list(buyerSellerGridFees['gridFee'].unique())
+
+            #run the process interatively from lowest to highest grid fee
             for gridFee in gridFeesOrdered:
                 transactionsWithThisGridFee = buyerSellerGridFees[buyerSellerGridFees['gridFee'] == gridFee]
 
@@ -415,12 +361,13 @@ class Pool:
                         localPoolMembersMatches = self.executeDFMatchRow(sellersTransactions, localPoolMembersMatches)
 
                     elif len(sellersTransactions) > 1:
-                        # first match the ones where the supply and demand are equal
 
+                        # first match the ones where the supply and demand are equal
                         secondPriority = sellersTransactions[
                             abs(sellersTransactions['buyerTradeableEnergy']) != sellersTransactions[
                                 'sellerTradeableEnergy']]
 
+                        # then distribute the energy of the seller in a weighted fashion according to the demand of each buyer
                         if len(secondPriority) > 0:
                             localPoolMembersMatches = self.distributeEnergyByWeight(secondPriority,
                                                                                     localPoolMembersMatches)
@@ -440,7 +387,7 @@ class Pool:
                 self.localPoolMember.currentMatches.append(match)
                 localPoolMembersMatches.append(match)
 
-        else:
+        else: #if the local pool member is not participating in the round - just record null transactions with everyone
             for sellerID in self.energySellers:
                 seller = self.energySellers[sellerID]
                 match = poolMatch(self.localPoolMember.memberID, seller.memberID, 0, 0, 0)
@@ -455,6 +402,7 @@ class Pool:
         self.matchesToDict()
         return localPoolMembersMatches
 
+    #make a DataFrame that contains all the seller-buyer pairs sorted by the grid fee
     def makeSellerBuyerTable(self):
         # determine all pairwise grid fees for this seller and sort the buyers by them
         buyerSellerGridFees = pd.DataFrame(
@@ -496,6 +444,7 @@ class Pool:
                 matchesDict[match.consumerID] = match
         self.localPoolMember.currentMatches = matchesDict
 
+    #take a row from the table of seller-buyer transactions and execute that transaction
     def executeDFMatchRow(self, dfRow, localPoolMembersMatches):
         if dfRow.index[0] == 'buyerID':
             sellerID = dfRow.loc['sellerID']
@@ -526,7 +475,8 @@ class Pool:
         return localPoolMembersMatches
 
 
-
+    #distribute the energy of the seller across buyers according to the relative demand
+    #output is the updated list of matches of the local member + information within member objects is modified
     def distributeEnergyByWeight(self, dfRows, localPoolMembersMatches):
         sellerID = dfRows['sellerID'].values[0]
         seller = self.energySellers[sellerID]
@@ -536,20 +486,24 @@ class Pool:
 
         allBuyersDemand = dfRows['buyerTradeableEnergy'].sum()
 
+        #demand is a negative number
         if allBuyersDemand < 0:
             for buyerID in buyerIDs:
                 buyer = self.energyBuyers[buyerID]
                 buyersTradeableEnergy = dfRows.loc[dfRows['buyerID'] == buyerID, 'buyerTradeableEnergy'].values[0]
 
+                #calculate relative demand for this buyer and the energy that will go to him/her
                 allocatedEnergy = sellerOriginalTradeableEnergy * (buyersTradeableEnergy / allBuyersDemand)
 
-
+                #execute the match with the allocated energy
                 sellersTradeableEnergy, buyer.tradeableEnergyInPool, match = self.executeMatch(seller, buyer, sellersTradeableEnergy=allocatedEnergy, buyersTradeableEnergy=buyer.tradeableEnergyInPool)
 
+                #update sellers tradeable energy
                 seller.tradeableEnergyInPool -= match.energyTraded
                 if abs(seller.tradeableEnergyInPool) < 0.000001:
                     seller.tradeableEnergyInPool = 0
 
+                #add the transaction to the respective members' records
                 if (seller.memberID == self.localPoolMember.memberID) | (
                         buyer.memberID == self.localPoolMember.memberID):
                     localPoolMembersMatches.append(match)
@@ -589,6 +543,7 @@ class Pool:
 
         return sellersTradeableEnergy, buyersTradeableEnergy, record
 
+    #send matches to the respective transaction partners for comparison
     async def sendMatchesForValidation(self, matches):
         coroutines = []
 
@@ -596,6 +551,7 @@ class Pool:
                 coroutines.append(self.sendOneMatchForValidation(match))
         await asyncio.gather(*coroutines)
 
+    #send transaction details to the partner in that transaction
     async def sendOneMatchForValidation(self, matchWithTheMember):
         if self.localPoolMember.roleInRound == 0:
             targetMemberID = matchWithTheMember.producerID
@@ -666,6 +622,7 @@ class Pool:
 
     #---------------------------------------FOR NEW LOGGING------------------------------------------------------
 
+    #record the transactions for the local member for this round in a csv file
     def recordTransactionsInTheLog(self, matches):
         outputColumns = ['producerID', 'consumerID', "energyTraded (kwh)", 'rate (ct/kwh)', 'gridUsageFee (ct/kwh)',
                          'totalPrice (ct)', 'pool', 'allocatedEnergy (kwh)', 'timestamp', 'simRound']
@@ -696,6 +653,8 @@ class Pool:
         file.to_csv(self.logFileName, index=False)
 
     #---------------------------------------FOR OLD LOGGING------------------------------------------------------
+
+    #print members of the pool with their respective roles and available energy
     def createMemberGroupString(self, membersRole, membersGroup):
         membersString = '{} \n'.format(membersRole)
         for memberID in membersGroup:
@@ -705,6 +664,7 @@ class Pool:
         membersString += '\n'
         return membersString
 
+    # print members of the pool with their respective roles and available energy
     def createMemberInfoString(self):
         memberInfoString = '\nPOOL MEMBERS \n'
         memberInfoString += self.createMemberGroupString('Energy Sellers', self.energySellers)
@@ -712,6 +672,7 @@ class Pool:
         memberInfoString += self.createMemberGroupString('Not participating in the round', self.notParticipating)
         return memberInfoString
 
+    #print verified transactions of the local pool member in this round
     def createMatchesString(self, matches):
         transactions = '\nTRANSACTIONS WITH THE LOCAL MEMBER \n'
         for match in matches:
@@ -738,7 +699,7 @@ class localPoolMember(poolMember):
                  totalTradeableEnergy, greenEnergy, greyEnergy, gridLocation):
         poolMember.__init__(self, memberID=memberID, roleInRound=-1, tradeableEnergyInPool=0, gridLocation=gridLocation)
         self.poolID = poolID
-        self.greenEnergyPool = greenEnergyPool
+        self.greenEnergyPool = greenEnergyPool #whether it is a green energy pool
         self.allowedRole = allowedRole #the role that the person joined the pool as
         self.userEnergyDistributionAsProducer = userEnergyDistributionAsProducer
         self.userEnergyDistributionAsConsumer = userEnergyDistributionAsConsumer
@@ -779,6 +740,7 @@ class poolMatch:
         self.energyPoolPrice = energyPrice
         self.gridUsageFee = gridUsageFee
 
+    #for the P2P exchange and validation
     def createMessage(self):
         message = {
             "producerID": self.producerID,
@@ -806,6 +768,7 @@ def createInterpoolMessage(sourceID, targetID, payloadType, message):
 # ------------------------------------COMMUNICATION----------------------------------------------------------
 # ___________________________________________________________________________________________________________
 
+#create a json message to be sent to other members of the pool
 class interPoolMessage(BaseModel): #from the admin pool to the member pool
     originProsumerID: str
     targetProsumerID: str
@@ -864,7 +827,7 @@ async def runOneSmallRound(roundNo, allMemberIDs):
     outputs = await asyncio.gather(*coroutines)
     return outputs
 
-
+#loop through all condition combinations
 for communityCondition in communityConditions:
     if debugCommunityCondition != '':
         communityCondition = debugCommunityCondition
@@ -876,10 +839,13 @@ for communityCondition in communityConditions:
 
             if dataset == 'debug':
                 simulationRound = 0
+
+            #get the number of consumers and producers from the condition name
             consNo, prosNo = communityCondition.split('_')
             noOfConsumers = int(consNo[4:])
             noOfProsumers = int(prosNo[4:])
 
+            #whether pooling and market are present in this trading condition
             pooling = tradingConditions[tradingCondition][0]
             market = tradingConditions[tradingCondition][1]
 
@@ -921,21 +887,25 @@ for communityCondition in communityConditions:
             os.makedirs(poolsLogDir)
             communityLog = os.path.join(poolsLogDir, 'communityLog.csv')
 
-            #save the user preference table as csv
-            # communityPoolsDF.to_csv(os.path.join(poolsLogDir, 'userPreferences.csv'))
-
             communityLogWithMarket = pd.DataFrame()
             commMetrics = []
             acceptanceRates = []
 
+            #run each timeslot
             for timeslotNo in range(0, noOfTimeslotsInRound):
                 simTimestamp = ''
-                fakeObsdDB = createFakeObsdDB(timeslotNo, dataset, allMembers)
+                fakeObsdDB = createFakeObsdDB(timeslotNo, dataset, allMembers) #energy infor for all members in this timeslot
+
+                #run the round and record in the log
                 simulationLog = asyncio.run(runOneSmallRound(timeslotNo, allMemberIDs))
                 simulationLog = pd.concat(simulationLog).reset_index()
+
+                #calculate performance metrics for this timeslot
                 selfSuffCons, accRates = calculateAllMetricsPerRound(simulationLog, poolsLogDir, calculateAcceptance=True, poolOrMarket='pool', marketPrice=marketPrice, allMemberIDs=allMemberIDs)
                 commMetrics.append(selfSuffCons)
                 acceptanceRates.append(accRates)
+
+                #also calculate metrics for the market stage if there is one in this round
                 if market:
                     newCommunityLog = runDoubleAuctionRound(simulationLog, poolsLogDir)
                     selfSuffCons, accRates = calculateAllMetricsPerRound(newCommunityLog, poolsLogDir, calculateAcceptance=True, poolOrMarket='market', marketPrice=marketPrice, allMemberIDs=allMemberIDs)
@@ -946,8 +916,5 @@ for communityCondition in communityConditions:
             commMetrics = pd.concat(commMetrics)
             if len(acceptanceRates[0]):
                 acceptanceRates = pd.concat(acceptanceRates)
-            # print('Round {}: Self-sufficiency: {}         Self-consumption: {}'.format(simulationRound, commMetrics['Self-sufficiency'].mean(), commMetrics['Self-consumption'].mean()))
-            #
-            #
 
 

@@ -8,6 +8,7 @@ from createCommunity import *
 #simulate a fake database of participants and their pool sets
 
 
+#pool information schema
 class CPPool(BaseModel):
     poolID: str
     description: Optional[str] = None
@@ -26,6 +27,7 @@ class CPPool(BaseModel):
     participantAllowedRoles: list = []
 
 
+#schema for a set of pools
 class setOfPools(BaseModel):
     timeSlot: str
     targetComponentID: str
@@ -34,7 +36,8 @@ class setOfPools(BaseModel):
 
 
 
-
+#generate the database with the information of pool memberships and energy distribution for each member
+#for each member, it also contains the configuration for each pool that he/she is a member of
 def generatefakeCPDatabase(communityPoolsDF, allMemberIDs, gridLocationsList):
     fakeCPDatabase = {}
     for memberID in allMemberIDs:

@@ -13,6 +13,11 @@ noOfNewUserPrefSetups = 4
 if not os.path.exists('testLogs'):
     os.makedirs('testLogs')
 
+#extract energy data for a required number of members belonging to the specified role (prosumer/consumer)
+#also within the specified date range
+#outputs a formatted dataframe with the energy info of all members with the specified requirements
+#if the role is consumer, outputs only demand data for this set of users
+#for prosumers, defines the role for each timestamp (i.e. whether at that timepoint there is more demand or supply)
 def extractEnergyDataForRole(role, roleCount, startDate, endDate, dataset, startingMemberNo=1, disregardTIme=True):
     energyDataPath = f'data/{dataset}/'
 
@@ -125,6 +130,7 @@ def extractEnergyDataForRole(role, roleCount, startDate, endDate, dataset, start
 
     return roleMembers, memberNo
 
+#generate user preferences depending on the setup
 def createCommunityPoolAllocation(allMemberIDs, market, pooling):
         communityPoolsDF = pd.DataFrame()
         for memberID in allMemberIDs:
@@ -223,7 +229,7 @@ def createCommunityPoolAllocation(allMemberIDs, market, pooling):
 
 
 
-
+#loops through trading conditions to trigger user preference setup generation
 def generateNewCommunitySetupsFunc(noIds):
     tradingConditions = [[True, True], [False, True], [True, False]]
     allMemberIDs = []

@@ -1,6 +1,7 @@
 from libraryImports import *
 from createCommunity import *
 
+#data schema
 class obsdData(BaseModel):
     targetComponentID: str = "PoolingPlatform"
     userID: str
@@ -13,21 +14,17 @@ class obsdData(BaseModel):
 
 
 fakeObsdDB = {}
+
+#create a database with energy information for all the members for the given timeslot
 def createFakeObsdDB(timeslotNo, dataset, allMembers):
     allMemberIDs = list(allMembers)
     for memberID in allMemberIDs:
-        if memberID == 'H19':
-            pass
         if dataset == "dataset2":
             memberInfo = allMembers[memberID]
             timestamp = memberInfo.index[timeslotNo]
             greyEnergy = memberInfo.loc[timestamp, 'CHP'] + memberInfo.loc[timestamp, 'Load']
             greenEnergy = memberInfo.loc[timestamp, 'PV']
 
-        elif dataset == 'dataset1':
-            greyEnergy = 0
-            greenEnergy = allMembers[memberID][timeslotNo]
-            timestamp = allMembers.index[timeslotNo]
 
         elif dataset == 'debug':
             memberInfo = allMembers[memberID]
@@ -45,41 +42,8 @@ def createFakeObsdDB(timeslotNo, dataset, allMembers):
         fakeObsdDB[memberID] = dataItem
     return fakeObsdDB
 
-pass
 
-# fakeObsdDB = {
-#     "participant0": obsdData(
-#         targetComponentID = "PoolingPlatform",
-#         userID = 'participant1',
-#         timeStamp = str(date.today()),
-#         energyKwh = -600,
-#         gridRestrictions = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-#     ),
-#     "participant1": obsdData(
-#         targetComponentID = "PoolingPlatform",
-#         userID = 'participant2',
-#         timeStamp = str(date.today()),
-#         energyKwh = 400,
-#         gridRestrictions = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-#     ),
-#     "participant2": obsdData(
-#         targetComponentID = "PoolingPlatform",
-#         userID = 'participant3',
-#         timeStamp = str(date.today()),
-#         energyKwh = 800,
-#         gridRestrictions = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-#     ),
-#     "participant3": obsdData(
-#         targetComponentID = "PoolingPlatform",
-#         userID = 'participant4',
-#         timeStamp = str(date.today()),
-#         energyKwh = 800,
-#         gridRestrictions = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-#     ),
-#
-# }
-
-
+#instead of REST API used in the full version
 def getObsdData(participantID):
     return fakeObsdDB[participantID]
 
