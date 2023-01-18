@@ -13,6 +13,7 @@ from runDoubleAuction import *
 import shutil
 from performanceMetrics import *
 from globalVars import *
+import sys
 
 poolingApp = FastAPI()
 
@@ -62,6 +63,8 @@ class PoolingPlatform:
 
         if dataset == 'debug':
             poolConfigurations['pools'] = [poolConfigurations['pools'][0]]
+            poolConfigurations['pools'][0].userEnergyDistributionAsConsumer = 100
+            poolConfigurations['pools'][0].userEnergyDistributionAsProducer = 100
 
         # set up pools based on the above info and add them to the pool array
         for poolConfig in poolConfigurations['pools']:
@@ -349,30 +352,63 @@ class Pool:
                 #also update the tables
                 buyerSellerGridFees = self.makeSellerBuyerTable()
                 transactionsWithThisGridFee = buyerSellerGridFees[buyerSellerGridFees['gridFee'] == gridFee]
-                transactionsWithThisGridFee = transactionsWithThisGridFee.sort_values(by=['sellerTradeableEnergy'], ascending=False)
 
-                #then loop through sellers and distribute the remnants
-                sellerIDs = transactionsWithThisGridFee['sellerID'].unique()
-                for sellerID in sellerIDs:
-                    sellersTransactions = transactionsWithThisGridFee[transactionsWithThisGridFee['sellerID'] == sellerID]
+                #check if total tradeable energy is higher for buyers or sellers
+                #decide on further distribution method accordingly
+                if abs(transactionsWithThisGridFee['buyerTradeableEnergy'].sum()) >= abs(transactionsWithThisGridFee['sellerTradeableEnergy'].sum()):
+                    transactionsWithThisGridFee = transactionsWithThisGridFee.sort_values(by=['sellerTradeableEnergy'],
+                                                                                          ascending=False)
+                    #then loop through sellers and distribute the remnants
+                    sellerIDs = transactionsWithThisGridFee['sellerID'].unique()
+                    for sellerID in sellerIDs:
+                        sellersTransactions = transactionsWithThisGridFee[transactionsWithThisGridFee['sellerID'] == sellerID]
 
-                    # if there is only one buyer for the seller, just execute the match
-                    if len(sellersTransactions) == 1:
-                        localPoolMembersMatches = self.executeDFMatchRow(sellersTransactions, localPoolMembersMatches)
+                        # if there is only one buyer for the seller, just execute the match
+                        if len(sellersTransactions) == 1:
+                            localPoolMembersMatches = self.executeDFMatchRow(sellersTransactions, localPoolMembersMatches)
 
-                    elif len(sellersTransactions) > 1:
+                        elif len(sellersTransactions) > 1:
 
-                        # first match the ones where the supply and demand are equal
-                        secondPriority = sellersTransactions[
-                            abs(sellersTransactions['buyerTradeableEnergy']) != sellersTransactions[
-                                'sellerTradeableEnergy']]
+                            # first match the ones where the supply and demand are equal
+                            secondPriority = sellersTransactions[
+                                abs(sellersTransactions['buyerTradeableEnergy']) != sellersTransactions[
+                                    'sellerTradeableEnergy']]
 
-                        # then distribute the energy of the seller in a weighted fashion according to the demand of each buyer
-                        if len(secondPriority) > 0:
-                            localPoolMembersMatches = self.distributeEnergyByWeight(secondPriority,
-                                                                                    localPoolMembersMatches)
-                            buyerSellerGridFees = self.updateBuyersTradeableEnergy(secondPriority, buyerSellerGridFees)
-                            transactionsWithThisGridFee = self.updateBuyersTradeableEnergy(secondPriority, transactionsWithThisGridFee)
+                            # then distribute the energy of the seller in a weighted fashion according to the demand of each buyer
+                            if len(secondPriority) > 0:
+                                localPoolMembersMatches = self.distributeSellersEnergyByWeight(secondPriority,
+                                                                                              localPoolMembersMatches)
+                                buyerSellerGridFees = self.updateTradeableEnergyForRole(secondPriority, buyerSellerGridFees, 0)
+                                transactionsWithThisGridFee = self.updateTradeableEnergyForRole(secondPriority, transactionsWithThisGridFee, 0)
+                else:
+                    transactionsWithThisGridFee = transactionsWithThisGridFee.sort_values(by=['buyerTradeableEnergy'],
+                                                                                          ascending=True)
+                    # then loop through sellers and distribute the remnants
+                    buyerIDs = transactionsWithThisGridFee['buyerID'].unique()
+                    for buyerID in buyerIDs:
+                        buyersTransactions = transactionsWithThisGridFee[
+                            transactionsWithThisGridFee['buyerID'] == buyerID]
+
+                        # if there is only one buyer for the seller, just execute the match
+                        if len(buyersTransactions) == 1:
+                            localPoolMembersMatches = self.executeDFMatchRow(buyersTransactions,
+                                                                             localPoolMembersMatches)
+
+                        elif len(buyersTransactions) > 1:
+
+                            # first match the ones where the supply and demand are equal
+                            secondPriority = buyersTransactions[
+                                abs(buyersTransactions['buyerTradeableEnergy']) != buyersTransactions[
+                                    'sellerTradeableEnergy']]
+
+                            # then distribute the energy of the seller in a weighted fashion according to the demand of each buyer
+                            if len(secondPriority) > 0:
+                                localPoolMembersMatches = self.distributeBuyersEnergyByWeight(secondPriority,
+                                                                                              localPoolMembersMatches)
+                                buyerSellerGridFees = self.updateTradeableEnergyForRole(secondPriority,
+                                                                                        buyerSellerGridFees, 1)
+                                transactionsWithThisGridFee = self.updateTradeableEnergyForRole(secondPriority,
+                                                                                                transactionsWithThisGridFee, 1)
 
 
             # also record null matchs for the members not participating in this trading round
@@ -429,9 +465,14 @@ class Pool:
         return buyerSellerGridFees
 
     #update the tradeable energy for the buyers in the table after transactions are completed
-    def updateBuyersTradeableEnergy(self, transactionsTable, buyerSellerGridFees):
+    def updateTradeableEnergyForRole(self, transactionsTable, buyerSellerGridFees, role):
         for index, transaction in transactionsTable.iterrows():
-            buyerSellerGridFees.loc[buyerSellerGridFees['buyerID'] == transaction['buyerID'], 'buyerTradeableEnergy'] = self.energyBuyers[transaction['buyerID']].tradeableEnergyInPool
+            if role == 0:
+                buyerSellerGridFees.loc[buyerSellerGridFees['buyerID'] == transaction['buyerID'], 'buyerTradeableEnergy'] = self.energyBuyers[transaction['buyerID']].tradeableEnergyInPool
+            else:
+                buyerSellerGridFees.loc[
+                    buyerSellerGridFees['sellerID'] == transaction['sellerID'], 'sellerTradeableEnergy'] = \
+                self.energySellers[transaction['sellerID']].tradeableEnergyInPool
         return buyerSellerGridFees
 
     # format the transaction history as a dict
@@ -477,7 +518,7 @@ class Pool:
 
     #distribute the energy of the seller across buyers according to the relative demand
     #output is the updated list of matches of the local member + information within member objects is modified
-    def distributeEnergyByWeight(self, dfRows, localPoolMembersMatches):
+    def distributeSellersEnergyByWeight(self, dfRows, localPoolMembersMatches):
         sellerID = dfRows['sellerID'].values[0]
         seller = self.energySellers[sellerID]
         sellerOriginalTradeableEnergy = dfRows.loc[dfRows['sellerID'] == sellerID, 'sellerTradeableEnergy'].values[0]
@@ -502,6 +543,41 @@ class Pool:
                 seller.tradeableEnergyInPool -= match.energyTraded
                 if abs(seller.tradeableEnergyInPool) < 0.000001:
                     seller.tradeableEnergyInPool = 0
+
+                #add the transaction to the respective members' records
+                if (seller.memberID == self.localPoolMember.memberID) | (
+                        buyer.memberID == self.localPoolMember.memberID):
+                    localPoolMembersMatches.append(match)
+                seller.currentMatches.append(match)
+                buyer.currentMatches.append(match)
+
+        return localPoolMembersMatches
+
+    def distributeBuyersEnergyByWeight(self, dfRows, localPoolMembersMatches):
+        buyerID = dfRows['buyerID'].values[0]
+        buyer = self.energyBuyers[buyerID]
+        buyerOriginalTradeableEnergy = dfRows.loc[dfRows['buyerID'] == buyerID, 'buyerTradeableEnergy'].values[0]
+
+        sellerIDs = dfRows['sellerID'].unique()
+
+        allSellersSupply= dfRows['sellerTradeableEnergy'].sum()
+
+        #demand is a negative number
+        if allSellersSupply > 0:
+            for sellerID in sellerIDs:
+                seller = self.energySellers[sellerID]
+                sellersTradeableEnergy = dfRows.loc[dfRows['sellerID'] == sellerID, 'sellerTradeableEnergy'].values[0]
+
+                #calculate relative demand for this buyer and the energy that will go to him/her
+                allocatedEnergy = buyerOriginalTradeableEnergy * (sellersTradeableEnergy / allSellersSupply)
+
+                #execute the match with the allocated energy
+                seller.tradeableEnergyInPool, buyersRemainingEnergy, match = self.executeMatch(seller, buyer, sellersTradeableEnergy=seller.tradeableEnergyInPool, buyersTradeableEnergy=allocatedEnergy)
+
+                #update sellers tradeable energy
+                buyer.tradeableEnergyInPool += match.energyTraded #because buyers' treadeable energy is negative
+                if abs(buyer.tradeableEnergyInPool) < 0.000001: #to deal with funny numbers
+                    buyer.tradeableEnergyInPool = 0
 
                 #add the transaction to the respective members' records
                 if (seller.memberID == self.localPoolMember.memberID) | (
@@ -862,13 +938,16 @@ for communityCondition in communityConditions:
 
             if dataset == 'dataset1':
                 allMembers = pd.concat([consumers, prosumers], axis=1)
-            else:
+            elif (sys.version_info[0] >= 3) & (sys.version_info[1] >= 10):
                 allMembers = consumers | prosumers
+            else:
+                allMembers = consumers
+                allMembers.update(prosumers)
 
             allMemberIDs = list(allMembers)
             gridLocationsList = []
             for index in range(0, len(allMemberIDs)):
-                gridLocationsList.append(index % 3)
+                gridLocationsList.append(index % 4)
 
 
 
